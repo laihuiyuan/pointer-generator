@@ -13,13 +13,13 @@ The project are heavily borrowed from [atulkum-pointer_summarizer](https://githu
 ## Quick start
 * The path and parameters of project:
 you might need to change some path and parameters in utils/config.py according your setup.
-* Get the dataset:
+* Dataset:
 you can download the CNN/DailyMail dataset from https://github.com/JafferWilson/Process-Data-of-CNN-DailyMail, 
 then run make-datafiles.py to process data. For the specific process, you can refer to https://github.com/abisee/cnn-dailymail.
-* Runing: 
+* Run: 
 you can run train.py, eval.py, and test for training, evaluating, and test, respectively.
 
 ### Note:
-* In the decode mode beam search, there is only single example repeated across the batch.
+* There is only single example repeated across the batch in the decode mode of beam search.
 
 
