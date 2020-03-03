@@ -5,13 +5,14 @@ from __future__ import unicode_literals, print_function, division
 import os
 import time
 import argparse
+import numpy as np
 import tensorflow as tf
 
 import torch
 import torch.optim as optim
-from torch.nn.utils import clip_grad_norm_
 
-from models.model import Model
+from transformer.model import Model
+from transformer.optim import ScheduledOptim
 from utils import config
 from utils.dataset import Vocab
 from utils.dataset import Batcher
@@ -20,7 +21,6 @@ from utils.utils import get_output_from_batch
 from utils.utils import calc_running_avg_loss
 
 use_cuda = config.use_gpu and torch.cuda.is_available()
-
 
 class Train(object):
     def __init__(self):
@@ -40,26 +40,45 @@ class Train(object):
         self.summary_writer = tf.summary.FileWriter(train_dir)
 
     def save_model(self, running_avg_loss, iter):
+        model_state_dict = self.model.state_dict()
+
         state = {
             'iter': iter,
-            'encoder_state_dict': self.model.encoder.state_dict(),
-            'decoder_state_dict': self.model.decoder.state_dict(),
-            'reduce_state_dict': self.model.reduce_state.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-            'current_loss': running_avg_loss
+            'current_loss': running_avg_loss,
+            'optimizer': self.optimizer._optimizer.state_dict(),
+            "model": model_state_dict
         }
         model_save_path = os.path.join(self.model_dir, 'model_%d_%d' % (iter, int(time.time())))
         torch.save(state, model_save_path)
 
-    def setup_train(self, model_path=None):
-        self.model = Model(model_path, is_tran= config.tran)
-        initial_lr = config.lr_coverage if config.is_coverage else config.lr
+    def setup_train(self, model_path):
 
-        params = list(self.model.encoder.parameters()) + list(self.model.decoder.parameters()) + \
-                 list(self.model.reduce_state.parameters())
+        device = torch.device('cuda' if use_cuda else 'cpu')
+
+        self.model = Model(
+            config.vocab_size,
+            config.vocab_size,
+            config.max_enc_steps,
+            config.max_dec_steps,
+            d_k=config.d_k,
+            d_v=config.d_v,
+            d_model=config.d_model,
+            d_word_vec=config.emb_dim,
+            d_inner=config.d_inner_hid,
+            n_layers=config.n_layers,
+            n_head=config.n_head,
+            dropout=config.dropout).to(device)
+
+        self.optimizer = ScheduledOptim(
+            optim.Adam(
+                filter(lambda x: x.requires_grad, self.model.parameters()),
+                betas=(0.9, 0.98), eps=1e-09),
+            config.d_model, config.n_warmup_steps)
+
+
+        params = list(self.model.encoder.parameters()) + list(self.model.decoder.parameters())
         total_params = sum([param[0].nelement() for param in params])
         print('The Number of params of model: %.3f million' % (total_params / 1e6))  # million
-        self.optimizer = optim.Adagrad(params, lr=initial_lr, initial_accumulator_value=config.adagrad_init_acc)
 
         start_iter, start_loss = 0, 0
 
@@ -69,9 +88,9 @@ class Train(object):
             start_loss = state['current_loss']
 
             if not config.is_coverage:
-                self.optimizer.load_state_dict(state['optimizer'])
+                self.optimizer._optimizer.load_state_dict(state['optimizer'])
                 if use_cuda:
-                    for state in self.optimizer.state.values():
+                    for state in self.optimizer._optimizer.state.values():
                         for k, v in state.items():
                             if torch.is_tensor(v):
                                 state[k] = v.cuda()
@@ -80,55 +99,25 @@ class Train(object):
 
     def train_one_batch(self, batch):
         enc_batch, enc_lens, enc_pos, enc_padding_mask, enc_batch_extend_vocab, \
-        extra_zeros, c_t, coverage = get_input_from_batch(batch, use_cuda)
+        extra_zeros, c_t, coverage = get_input_from_batch(batch, use_cuda, transformer=True)
         dec_batch, dec_lens, dec_pos, dec_padding_mask, max_dec_len, tgt_batch = \
-            get_output_from_batch(batch, use_cuda)
+            get_output_from_batch(batch, use_cuda, transformer=True)
 
         self.optimizer.zero_grad()
 
-        if not config.tran:
-            enc_out, enc_fea, enc_h = self.model.encoder(enc_batch, enc_lens)
-        else:
-            enc_out, enc_fea, enc_h = self.model.encoder(enc_batch, enc_pos)
+        pred = self.model(enc_batch, enc_pos, dec_batch, dec_pos)
+        gold_probs = torch.gather(pred, -1, tgt_batch.unsqueeze(-1)).squeeze()
+        batch_loss = -torch.log(gold_probs + config.eps)
+        batch_loss = batch_loss * dec_padding_mask
 
-        s_t = self.model.reduce_state(enc_h)
-
-        step_losses, cove_losses = [], []
-        for di in range(min(max_dec_len, config.max_dec_steps)):
-            y_t = dec_batch[:, di]  # Teacher forcing
-            final_dist, s_t, c_t, attn_dist, p_gen, next_coverage = \
-                self.model.decoder(y_t, s_t, enc_out, enc_fea, enc_padding_mask, c_t,
-                                   extra_zeros, enc_batch_extend_vocab, coverage, di)
-            tgt = tgt_batch[:, di]
-            step_mask = dec_padding_mask[:, di]
-            gold_probs = torch.gather(final_dist, 1, tgt.unsqueeze(1)).squeeze()
-            step_loss = -torch.log(gold_probs + config.eps)
-            if config.is_coverage:
-                step_coverage_loss = torch.sum(torch.min(attn_dist, coverage), 1)
-                step_loss = step_loss + config.cov_loss_wt * step_coverage_loss
-                cove_losses.append(step_coverage_loss * step_mask)
-                coverage = next_coverage
-
-            step_loss = step_loss * step_mask
-            step_losses.append(step_loss)
-
-        sum_losses = torch.sum(torch.stack(step_losses, 1), 1)
+        sum_losses = torch.sum(batch_loss, 1)
         batch_avg_loss = sum_losses / dec_lens
         loss = torch.mean(batch_avg_loss)
 
         loss.backward()
 
-        clip_grad_norm_(self.model.encoder.parameters(), config.max_grad_norm)
-        clip_grad_norm_(self.model.decoder.parameters(), config.max_grad_norm)
-        clip_grad_norm_(self.model.reduce_state.parameters(), config.max_grad_norm)
-
-        self.optimizer.step()
-
-        if config.is_coverage:
-            cove_losses = torch.sum(torch.stack(cove_losses, 1), 1)
-            batch_cove_loss = cove_losses / dec_lens
-            batch_cove_loss = torch.mean(batch_cove_loss)
-            return loss.item(), batch_cove_loss.item()
+        # update parameters
+        self.optimizer.step_and_update_lr()
 
         return loss.item(), 0.
 
@@ -151,7 +140,6 @@ class Train(object):
                 start = time.time()
             if iter % 5000 == 0:
                 self.save_model(running_avg_loss, iter)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train script")

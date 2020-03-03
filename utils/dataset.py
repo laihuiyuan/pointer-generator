@@ -223,7 +223,7 @@ class Batcher(object):
         self._vocab = vocab
         self._data_path = data_path
         self.batch_size = batch_size
-        self._single_pass = single_pass
+        self.single_pass = single_pass
         self.mode = mode
 
         # Initialize a queue of Batches waiting to be used, and a queue of Examples waiting to be batched
@@ -265,7 +265,7 @@ class Batcher(object):
             tf.logging.warning(
                 'Bucket input queue is empty when calling next_batch. Bucket queue size: %i, Input queue size: %i',
                 self._batch_queue.qsize(), self._example_queue.qsize())
-            if self._single_pass and self._finished_reading:
+            if self.single_pass and self._finished_reading:
                 tf.logging.info("Finished reading dataset in single_pass mode.")
                 return None
 
@@ -273,7 +273,7 @@ class Batcher(object):
         return batch
 
     def fill_example_queue(self):
-        example_generator = self.example_generator(self._data_path, self._single_pass)
+        example_generator = self.example_generator(self._data_path, self.single_pass)
         input_gen = self.pair_generator(example_generator)
 
         while True:
@@ -282,7 +282,7 @@ class Batcher(object):
                  abstract) = input_gen.__next__()  # read the next example from file. article and abstract are both strings.
             except StopIteration:  # if there are no more examples:
                 tf.logging.info("The example generator for this example queue filling thread has exhausted data.")
-                if self._single_pass:
+                if self.single_pass:
                     tf.logging.info(
                         "single_pass mode is on, so we've finished reading dataset. This thread is stopping.")
                     self._finished_reading = True
@@ -313,7 +313,7 @@ class Batcher(object):
                 batches = []
                 for i in range(0, len(inputs), self.batch_size):
                     batches.append(inputs[i:i + self.batch_size])
-                if not self._single_pass:
+                if not self.single_pass:
                     shuffle(batches)
                 for b in batches:  # each b is a list of Example objects
                     self._batch_queue.put(Batch(b, self._vocab, self.batch_size))

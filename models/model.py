@@ -4,9 +4,10 @@ import torch
 
 from utils import config
 from numpy import random
-from models.sublayers import Encoder
-from models.sublayers import Decoder
-from models.sublayers import ReduceState
+from models.layers import Encoder
+from models.layers import Decoder
+from models.layers import ReduceState
+from transformer.model import TranEncoder
 
 use_cuda = config.use_gpu and torch.cuda.is_available()
 
@@ -17,13 +18,16 @@ if torch.cuda.is_available():
 
 
 class Model(object):
-    def __init__(self, model_path=None, is_eval=False):
+    def __init__(self, model_path=None, is_eval=False, is_tran = False):
         encoder = Encoder()
         decoder = Decoder()
         reduce_state = ReduceState()
+        if is_tran:
+            encoder = TranEncoder(config.vocab_size, config.max_enc_steps, config.emb_dim,
+                 config.n_layers, config.n_head, config.d_k, config.d_v, config.d_model, config.d_inner)
 
         # shared the embedding between encoder and decoder
-        decoder.embedding.weight = encoder.embedding.weight
+        decoder.tgt_word_emb.weight = encoder.src_word_emb.weight
 
         if is_eval:
             encoder = encoder.eval()

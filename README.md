@@ -1,14 +1,16 @@
 # Pointer-Generator-Pytorch
 
-## About this repository
+## About
 The pytorch implementation of [Get To The Point: Summarization with Pointer-Generator Networks](https://arxiv.org/abs/1704.04368). 
-The project are heavily borrowed from [atulkum-pointer_summarizer](https://github.com/atulkum/pointer_summarizer.git).
+This implementation also tries to use Transformer as the encoder.
+The project are heavily borrowed from [atulkum-pointer_summarizer](https://github.com/atulkum/pointer_summarizer.git) and 
+[jadore801120-attention-is-all-you-need-pytorch](https://github.com/jadore801120/attention-is-all-you-need-pytorch).
 
 ## Requirements
 * python==3.7.4
 * pytorch==1.4.0
 * pyrouge==0.1.3
-* tensorflow==1.13.1
+* tensorflow>=1.13.1
 
 ## Quick start
 * The path and parameters of project:

@@ -14,7 +14,7 @@ from models.attention import Attention
 class Encoder(BasicModule):
     def __init__(self):
         super(Encoder, self).__init__()
-        self.embedding = nn.Embedding(config.vocab_size, config.emb_dim)
+        self.src_word_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.lstm = nn.LSTM(config.emb_dim, config.hidden_dim, batch_first=True, bidirectional=True)
         self.fc = nn.Linear(config.hidden_dim * 2, config.hidden_dim * 2, bias=False)
 
@@ -22,7 +22,7 @@ class Encoder(BasicModule):
 
     # seq_lens should be in descending order
     def forward(self, input, seq_lens):
-        embedded = self.embedding(input)
+        embedded = self.src_word_emb(input)
 
         packed = pack_padded_sequence(embedded, seq_lens, batch_first=True)
         output, hidden = self.lstm(packed)
@@ -59,7 +59,7 @@ class Decoder(BasicModule):
         super(Decoder, self).__init__()
         self.attention_network = Attention()
         # decoder
-        self.embedding = nn.Embedding(config.vocab_size, config.emb_dim)
+        self.tgt_word_emb = nn.Embedding(config.vocab_size, config.emb_dim)
         self.con_fc = nn.Linear(config.hidden_dim * 2 + config.emb_dim, config.emb_dim)
         self.lstm = nn.LSTM(config.emb_dim, config.hidden_dim, batch_first=True, bidirectional=False)
 
@@ -83,7 +83,7 @@ class Decoder(BasicModule):
                                                            enc_padding_mask, coverage)
             coverage = coverage_next
 
-        y_t_embd = self.embedding(y_t)
+        y_t_embd = self.tgt_word_emb(y_t)
         x = self.con_fc(torch.cat((c_t, y_t_embd), 1))
         lstm_out, s_t = self.lstm(x.unsqueeze(1), s_t)
 
